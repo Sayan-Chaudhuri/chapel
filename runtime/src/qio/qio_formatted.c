@@ -384,6 +384,9 @@ qioerr qio_channel_read_string(const int threadsafe, const int byteorder, const 
   int found_term=0;
   ssize_t len=0;
   ssize_t amt = 0;
+  ssize_t max_value;
+  int val;
+  struct stat fileInfo;
   err_t errcode;
 
   if( maxlen <= 0 ) maxlen = SSIZE_MAX - 1;
@@ -420,10 +423,22 @@ qioerr qio_channel_read_string(const int threadsafe, const int byteorder, const 
     case QIO_BINARY_STRING_STYLE_TOEOF:
       // read until the end of the file.
       // Figure out how many bytes are available.
-      err = _peek_until_len(ch, maxlen, &peek_amt);
+    //  err = _peek_until_len(ch, maxlen, &peek_amt);
+      
+      max_val=(((ssize_t)(1))<<(sizeof(ssize_t)*8-1))-1; //finding the maximum value of ssize_t type
+      if(maxlen==max_val)
+      {
+          val=sys_fstat(ch->file->fd, &fileInfo); //if length has not been specified, then obtain the entire size of the file through file metadata
+          peek_amt=fileInfo.st_size;
+      }
+      else
+      {
+          peek_amt=maxlen;//if length has been specified
+      }
       num = peek_amt;
+      err=NULL;
       // Ignore EOF errors as long as we read something.
-      if( err && qio_err_to_int(err) == EEOF && num > 0 ) err = 0;
+     // if( err && qio_err_to_int(err) == EEOF && num > 0 ) err = 0;
       break;
     default:
       if( str_style >= 0 ) {
