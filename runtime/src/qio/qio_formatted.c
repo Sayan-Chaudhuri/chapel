@@ -360,7 +360,82 @@ qioerr _append_char(char* restrict * restrict buf, size_t* restrict buf_len, siz
 
   return 0;
 }
+qioerr read_entire_file(const int threadsafe,qio_channel_t* restrict ch, const char* restrict* restrict out, int64_t* restrict len_out, ssize_t maxlen)
+{  
+  qioerr err,err_reading_file=0;
+  int64_t file_length;
+  char* ret=NULL;
+  ssize_t amt;
+  err_t errcode;
+  int64_t fileLenGuess=1024;
+  if( threadsafe ) 
+  {
+    err = qio_lock(&ch->lock);
+    if( err ) return err;
+  }
+  err = qio_channel_mark(false, ch);
+  if( err ) goto unlock;
+  //getting file length
+  err=qio_file_length(ch->file,&file_length);
+  //if file length successfully obtained
+  if(!err)
+  {
+    ret=qio_malloc(file_length+1);
+    ret[0]='\0';
+    err=qio_channel_read(false, ch, ret, file_length, &amt);
+  }
+//  else
+//  {
+//    fileLenGuess=1024;
+//  }
+  //in case file size information is not available or data was added to the file while reading
+  if(err)
+  {
+    ret=qio_malloc(fileLenGuess+1); //allocate an initial buffer size
+    while(true)
+    {
+      ret[0]='\0';
+      err_reading_file = qio_channel_read(false, ch, ret, fileLenGuess, &amt);
+      if (err_reading_file == QIO_EEOF) break; //if the buffer can contain the entire file data,break from the loop
+      fileLenGuess *= 2;                       //otherwise,double the buffer capacity
+      ret = qio_realloc(ret, fileLenGuess);
+    }
+    file_length=amt;                                           //amt denotes the total number of characters read from the file .
+    ret=qio_malloc(file_length+1);                            //adjust the buffer size to prevent wastage of space
+    err= qio_channel_read(false, ch, ret, file_length, &amt); //reread with adjusted buffer size
+  }
+    
+  
+  ret[file_length] = '\0'; // always add terminator at the end
+  //if( err_reading_file ) goto rewind;
+  //  if( amt != file_length )
+  //  {
+  //     err_reading_file = QIO_ESHORT;
+  //     // zero out the rest of it...
+  //     memset(ret + amt, 0, file_length - amt);
+  //     goto rewind;
+  //  }
+  err= 0;
+  unlock:
+    _qio_channel_set_error_unlocked(ch, err);
+  if( threadsafe ) 
+  {
+    qio_unlock(&ch->lock);
+  }
 
+  errcode = qio_err_to_int(err);
+  if( errcode && errcode != EEOF && errcode != ESHORT ) qio_free(ret);
+  else 
+  {
+    // don't modify out if we didn't read anything.
+    if( ret ) 
+    {
+      *out = ret;
+      *len_out = amt;
+    }
+  }
+  return err_reading_file;
+}
 // string binary style:
 // QIO_BINARY_STRING_STYLE_LEN1B_DATA -1 -- 1 byte of length before
 // QIO_BINARY_STRING_STYLE_LEN2B_DATA -2 -- 2 bytes of length before
@@ -387,7 +462,12 @@ qioerr qio_channel_read_string(const int threadsafe, const int byteorder, const 
   err_t errcode;
 
   if( maxlen <= 0 ) maxlen = SSIZE_MAX - 1;
-
+   if(str_style==QIO_BINARY_STRING_STYLE_TOEOF)  //if block moved before threadsafe
+  {
+    //printf("Inside the new if condition");
+    err=read_entire_file(ch,out,len_out,maxlen);
+    return err;
+  }
   if( threadsafe ) {
     err = qio_lock(&ch->lock);
     if( err ) return err;
